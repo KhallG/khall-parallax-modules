@@ -6,7 +6,7 @@ MODULE.description = "Adds a tab to the spawn menu for item spawning and the pos
 
 CAMI.RegisterPrivilege({
     Name = "Parallax - Item Spawn Menu",
-    MinAccess = "admin"
+    MinAccess = "superadmin"
 })
 
 function MODULE:GetCategoryIcon(category)
@@ -28,29 +28,28 @@ if SERVER then
     util.AddNetworkString("ItemSpawn_Request")
     util.AddNetworkString("ItemGive_Request")
 
-    ix.log.AddType("ItemSpawn_Request", function(client, itemName)
-        return string.format("%s spawned the item: \"%s\".", client:GetCharacter():GetName(), tostring(itemName))
-    end)
-
     net.Receive("ItemSpawn_Request", function(len, client)
         local uniqueID = net.ReadString()
 
         if not CAMI.PlayerHasAccess(client, "Parallax - Item Spawn Menu", nil) then return end
 
-        for _, item in pairs(ix.item.list) do
-            if item.uniqueID == uniqueID then
-                ix.item.Spawn(item.uniqueID, client:GetShootPos() + client:GetAimVector() * 84 + Vector(0, 0, 16), function(item, entity)
-                    if IsValid(entity) then
-                        undo.Create(item.name)
-                        undo.AddEntity(entity)
-                        undo.SetPlayer(client)
-                        undo.Finish()
-                    end
-                end)
-
-                ix.log.Add(client, "ItemSpawn_Request", item.name)
-                break
-            end
+        local itemTable = ax.item.stored[uniqueID]
+        if itemTable then
+            local pos = client:GetShootPos() + client:GetAimVector() * 84 + Vector(0, 0, 16)
+            local ang = Angle(0, client:EyeAngles().y, 0)
+            
+            ax.item:Spawn(uniqueID, pos, ang, function(item, entity)
+                if IsValid(entity) then
+                    undo.Create(itemTable.name)
+                    undo.AddEntity(entity)
+                    undo.SetPlayer(client)
+                    undo.Finish()
+                end
+            end)
+            
+            -- Log the spawn event
+            local charName = client:GetCharacter() and client:GetCharacter():GetName() or client:Nick()
+            ax.util:Print(string.format("%s spawned the item: \"%s\".", charName, itemTable.name))
         end
     end)
 
@@ -62,21 +61,33 @@ if SERVER then
 
         local uniqueID = data:lower()
 
-        if not ix.item.list[uniqueID] then
-            for k, v in SortedPairs(ix.item.list) do
-                if ix.util.StringMatches(v.name, uniqueID) then
+        if not ax.item.stored[uniqueID] then
+            for k, v in SortedPairs(ax.item.stored) do
+                if string.find(string.lower(v.name or ""), uniqueID, 1, true) then
                     uniqueID = k
                     break
                 end
             end
         end
 
-        local success, error = player:GetCharacter():GetInventory():Add(uniqueID, 1)
+        local character = player:GetCharacter()
+        if not character then
+            player:Notify("No character loaded.", "error")
+            return
+        end
+
+        local inventory = character:GetInventory()
+        if not inventory then
+            player:Notify("No inventory available.", "error")
+            return
+        end
+
+        local success, error = inventory:Add(uniqueID, 1)
 
         if success then
-            player:NotifyLocalized("itemCreated")
+            player:Notify("Item created successfully.", "success")
         else
-            player:NotifyLocalized(tostring(error))
+            player:Notify(tostring(error), "error")
         end
     end)
 else
@@ -90,8 +101,11 @@ else
         local tree, nav = panel.ContentNavBar.Tree, panel.OldSpawnlists
 
         local categories = {}
-        for uid, item in pairs(ix.item.list) do
-            local category = item.category
+        for uid, item in pairs(ax.item.stored) do
+            -- Skip base items
+            if rawget(item, "isBase") == true then continue end
+            
+            local category = item.category or "misc"
             categories[category] = categories[category] or {}
             table.insert(categories[category], item)
         end
@@ -111,7 +125,7 @@ else
 
                 for _, item in SortedPairsByMemberValue(items, "name") do
                     spawnmenu.CreateContentIcon("item", self.PropPanel, {
-                        nicename = (item.GetName and item:GetName()) or item.name,
+                        nicename = item.name,
                         spawnname = item.uniqueID,
                     })
                 end
@@ -135,9 +149,9 @@ else
         icon:SetTall(64)
         icon:InvalidateLayout(true)
 
-        local item = ix.item.list[uniqueID]
+        local item = ax.item.stored[uniqueID]
 
-        icon:SetModel((item.GetModel and item:GetModel()) or item.model)
+        icon:SetModel(item.model or "models/props_junk/wood_crate001a.mdl")
         icon:SetTooltip(name)
 
         icon.DoClick = function(self)
